@@ -8,15 +8,16 @@ from sklearn.metrics import classification_report
 import pickle
 import joblib
 from datetime import datetime
+from typing import List, Tuple, Optional, Dict, Any
 from src.models.item import Item
 from src.models.receipt_details import ReceiptDetails
 
 class ReceiptAgent:
-    def __init__(self, data_dir="./receipt_data"):
+    def __init__(self, data_dir: str = "./receipt_data") -> None:
         self.data_dir = data_dir
         self.training_data_path = os.path.join(data_dir, "training_data.csv")
         self.model_path = os.path.join(data_dir, "model")
-        self.confidence_threshold = 0.7  # Threshold for automatic classification
+        self.confidence_threshold = 0.9  # Threshold for automatic classification
         self.vectorizer = None
         self.classifier = None
         
@@ -38,7 +39,7 @@ class ReceiptAgent:
         if os.path.exists(f"{self.model_path}_classifier.pkl"):
             self.load_model()
         
-    def preprocess(self, item_name):
+    def preprocess(self, item_name: str) -> str:
         """Preprocess the name of an Item object"""
         # Convert to lowercase
         text = str(item_name).lower()
@@ -72,13 +73,16 @@ class ReceiptAgent:
 
         return text
     
-    def train_model(self, items, force=False):
+    def train_model(self, items: List[Item], force: bool = False) -> bool:
         """
         Train or retrain the model using an array of Item objects.
         
         Args:
             items: List of Item objects to use for training.
             force: Whether to force training even with insufficient data.
+
+        Returns:
+            True if the model was successfully trained, False otherwise.
         """
         # Convert items to a DataFrame
         new_data = pd.DataFrame([{
@@ -101,9 +105,16 @@ class ReceiptAgent:
         # Only use verified data for training
         train_df = self.training_data[self.training_data['verified'] == True]
 
-        # Check if we have enough data
-        if len(train_df) < 10 and not force:
-            print("Not enough verified data to train model.")
+        # Check if we have enough data and at least 2 samples per category
+        category_counts = train_df['category'].value_counts()
+        min_samples_per_category = 2
+        
+        if not force and (
+            len(train_df) < 10 or 
+            any(count < min_samples_per_category for count in category_counts.values.tolist())
+        ):
+            print(f"Not enough data for training. Need at least {min_samples_per_category} samples per category.")
+            print("Current category counts:", category_counts.to_dict())
             return False
 
         # Preprocess text
@@ -132,15 +143,28 @@ class ReceiptAgent:
         # Evaluate
         y_pred = self.classifier.predict(X_test)
         print("Model performance:")
-        print(classification_report(y_test, y_pred))
+        print(classification_report(
+            y_test, 
+            y_pred,
+            zero_division=0,  # Handle categories with no predictions
+            digits=3  # Show 3 decimal places for better precision monitoring
+        ))
 
         # Save model
         self.save_model()
 
         return True
     
-    def predict(self, item):
-        """Predict category for an Item object using item.code or item.name."""
+    def predict(self, item: Item) -> Tuple[Optional[str], float]:
+        """
+        Predict category for an Item object using item.code or item.name.
+
+        Args:
+            item: The Item object to predict the category for.
+
+        Returns:
+            A tuple containing the predicted category and the confidence score.
+        """
         if not self.classifier or not self.vectorizer:
             # If no model exists, return None
             return None, 0
@@ -168,7 +192,7 @@ class ReceiptAgent:
 
         return category, confidence
     
-    def process_receipt(self, receipt_details: ReceiptDetails, user_feedback=True):
+    def process_receipt(self, receipt_details: ReceiptDetails, user_feedback: bool = True) -> ReceiptDetails:
         """
         Process a ReceiptDetails object.
 
@@ -203,16 +227,14 @@ class ReceiptAgent:
                 category = "Uncategorized"
                 confidence = 0
                 verified = False
-            
-            # Dynamic category suggestions
-            suggested_categories = self.training_data['category'].value_counts().head(5).index.tolist()
-            print(f"Suggested categories: {', '.join(suggested_categories)}")
 
             # Get user feedback if needed
             if user_feedback and not verified:
                 print(f"\nItem: {item.name} (Code: {item.code})")
                 print(f"Predicted category: {category} (confidence: {confidence:.2f})")
-                print("Suggested categories: Groceries, Household, Electronics, Clothing, Furniture/Decor, Health/Personal Care, Auto, Pet")
+                # Dynamic category suggestions
+                suggested_categories = self.training_data['category'].value_counts().head(5).index.tolist()
+                print(f"Suggested categories: {', '.join(suggested_categories)}")
                 user_category = input("Enter correct category (or press Enter to accept prediction): ")
                 
                 if user_category:
@@ -247,11 +269,24 @@ class ReceiptAgent:
         if any(item.category != "Uncategorized" for item in results):
             self.train_model(results)
         
+        # Recalculate category-wide totals and tax percentages
+        category_totals, category_tax_percents = self._summarize_cost_by_category_and_tax(results)
+
+        # Calculate tax amounts per category
+        category_tax_amounts = {}
+        if receipt_details.tax > 0:
+            for category, tax_percent in category_tax_percents.items():
+                category_tax_amounts[category] = (tax_percent / 100.0) * receipt_details.tax
+
         # Update the ReceiptDetails object
         receipt_details.items = results
+        receipt_details.category_totals = category_totals
+        receipt_details.category_tax_percentages = category_tax_percents
+        receipt_details.category_tax_amounts = category_tax_amounts
+        
         return receipt_details
     
-    def save_model(self):
+    def save_model(self) -> None:
         """Save the trained model"""
         if not self.vectorizer or not self.classifier:
             return
@@ -261,8 +296,13 @@ class ReceiptAgent:
         
         joblib.dump(self.classifier, f"{self.model_path}_classifier.pkl")
     
-    def load_model(self):
-        """Load the trained model"""
+    def load_model(self) -> bool:
+        """
+        Load the trained model.
+
+        Returns:
+            True if the model was successfully loaded, False otherwise.
+        """
         try:
             with open(f"{self.model_path}_vectorizer.pkl", 'rb') as f:
                 self.vectorizer = pickle.load(f)
@@ -273,8 +313,13 @@ class ReceiptAgent:
             print("Could not load model. Will train a new one.")
             return False
     
-    def analyze_data(self):
-        """Analyze the training data"""
+    def analyze_data(self) -> Dict[str, Any]:
+        """
+        Analyze the training data.
+
+        Returns:
+            A dictionary containing analysis results.
+        """
         if len(self.training_data) == 0:
             return "No data available for analysis."
         
@@ -298,36 +343,82 @@ class ReceiptAgent:
             'items_needing_verification': len(low_confidence)
         }
     
-    def summarize_cost_by_category(self, items):
+    def _calculate_taxable_amounts(self, items: List[Item], tax_total: float) -> Dict[str, float]:
         """
-        Summarize the total cost by categories from a list of Item objects.
+        Calculate tax amount for each item based on their taxable status.
+
+        Args:
+            items: List of Item objects
+            tax_total: Total tax amount from receipt
+
+        Returns:
+            Dictionary with item codes as keys and their tax amounts as values
+        """
+        total_taxable = sum(item.price for item in items if item.is_taxable)
+        tax_amounts = {}
+        
+        if total_taxable > 0:
+            tax_rate = tax_total / total_taxable
+            for item in items:
+                if item.is_taxable:
+                    tax_amounts[item.code] = item.price * tax_rate
+                else:
+                    tax_amounts[item.code] = 0.0
+        else:
+            # If no taxable items, set all tax amounts to 0
+            tax_amounts = {item.code: 0.0 for item in items}
+            
+        return tax_amounts
+
+    def _summarize_cost_by_category_and_tax(self, items: List[Item]) -> Tuple[Dict[str, float], Dict[str, float]]:
+        """
+        Summarize the total cost and tax by categories.
 
         Args:
             items: List of Item objects.
 
         Returns:
-            A dictionary with categories as keys and total costs as values.
+            A tuple containing:
+            - A dictionary with categories as keys and total costs as values.
+            - A dictionary with categories as keys and tax percentages as values.
         """
         category_summary = {}
+        category_taxable_amounts = {}
+        
+        # Calculate totals per category and track taxable amounts
         for item in items:
             if item.category:
+                # Add to category total
                 category_summary[item.category] = category_summary.get(item.category, 0) + item.price
-        return category_summary
+                # Track taxable amounts per category
+                if item.is_taxable:
+                    category_taxable_amounts[item.category] = category_taxable_amounts.get(item.category, 0) + item.price
 
-    def verify_receipt_total(self, items, receipt_subtotal):
+        # Calculate tax percentages based on taxable amounts
+        total_taxable = sum(category_taxable_amounts.values())
+        category_tax_percentages = {}
+        
+        for category in category_summary.keys():
+            if total_taxable > 0:
+                category_tax_percentages[category] = (category_taxable_amounts.get(category, 0) / total_taxable) * 100
+            else:
+                category_tax_percentages[category] = 0
+        
+        return category_summary, category_tax_percentages
+
+    def verify_receipt_total(self, receipt_details: ReceiptDetails) -> bool:
         """
         Verify that the subtotal of the receipt matches the total summary per category.
 
         Args:
-            items: List of Item objects.
-            receipt_subtotal: The subtotal extracted from the receipt.
+            receipt_details: The ReceiptDetails object containing the receipt data.
 
         Returns:
             A boolean indicating whether the subtotal matches the total summary.
         """
-        category_summary = self.summarize_cost_by_category(items)
+        category_summary = receipt_details.category_totals
         total_from_categories = sum(category_summary.values())
-        return abs(total_from_categories - receipt_subtotal) < 0.01  # Allow small floating-point differences
+        return abs(total_from_categories - receipt_details.subtotal) < 0.01  # Allow small floating-point differences
 
 # Example usage
 if __name__ == "__main__":
