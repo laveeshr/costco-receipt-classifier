@@ -34,30 +34,67 @@ class EmailNotifier:
     def send_receipt_summary(self, receipt_details: ReceiptDetails, is_verified: bool) -> bool:
         """Send receipt summary via email"""
         try:
+            parsed_date = self._parse_date_from_path(receipt_details.receipt_path)
             msg = MIMEMultipart()
             msg['From'] = self.sender_email
             msg['To'] = self.recipient_email
-            msg['Subject'] = f"Costco Receipt Summary - {datetime.now().strftime('%Y-%m-%d')}"
+            msg['Subject'] = f"Costco Receipt Summary - {parsed_date}"            
 
-            body = f"Costco Receipt Summary ({datetime.now().strftime('%Y-%m-%d')})\n\n"
-            body += "Category Breakdown:\n"
+            body = f"""
+            <html>
+            <head>
+                <style>
+                    details {
+                        margin: 10px 0;
+                        padding: 10px;
+                        background-color: #f9f9f9;
+                        border-radius: 4px;
+                    }
+                    summary {
+                        cursor: pointer;
+                        padding: 5px;
+                    }
+                </style>
+            </head>
+            <body>
+            <h1>Costco Receipt Summary ({parsed_date})</h1>
+            <h2>Category Breakdown:</h2>
+            """
+            
             for category, amount in receipt_details.category_totals.items():
                 tax_amount = receipt_details.category_tax_amounts.get(category, 0.0)
                 tax_percent = receipt_details.category_tax_percentages.get(category, 0.0)
-                body += f"\t• {category}:\n"
-                body += f"\t\t  - Subtotal: ${amount:.2f}\n"
-                body += f"\t\t  - Tax: ${tax_amount:.2f} ({tax_percent:.1f}%)\n"
-                body += f"\t\t  - <b>Total: ${(amount + tax_amount):.2f}</b>\n"
-                body += "\n"
-            
-            body += f"\nReceipt Summary:"
-            body += f"\nSubtotal: ${receipt_details.subtotal:.2f}"
-            body += f"\nTax: ${receipt_details.tax:.2f}"
-            body += f"\nTotal: ${receipt_details.total:.2f}"
-            body += f"\n\nReceipt Path: {receipt_details.receipt_path}"
-            body += f"\n\nVerification Status: {'Verified' if is_verified else 'Not Verified'}"
+                body += f"""
+                <details>
+                    <summary>
+                        <strong>{category}</strong> - Total: ${(amount + tax_amount):.2f}
+                    </summary>
+                    <div style="margin-left: 20px;">
+                        <p>Subtotal: ${amount:.2f}</p>
+                        <p>Tax: ${tax_amount:.2f} ({tax_percent:.1f}%)</p>
+                        <ul>
+                """
+                for item in receipt_details.items:
+                    if item.category == category:
+                        body += f"<li>{item.description} - ${item.price:.2f}</li>"
+                body += """
+                        </ul>
+                    </div>
+                </details>
+                """
 
-            msg.attach(MIMEText(body, 'plain'))
+            body += f"""
+            <h2>Receipt Summary:</h2>
+            <p>Subtotal: ${receipt_details.subtotal:.2f}</p>
+            <p>Tax: ${receipt_details.tax:.2f}</p>
+            <p>Total: ${receipt_details.total:.2f}</p>
+            <p>Receipt Path: {receipt_details.receipt_path}</p>
+            <p>Verification Status: {'✅ Verified' if is_verified else '❌ Not Verified'}</p>
+            </body>
+            </html>
+            """
+
+            msg.attach(MIMEText(body, 'html'))
 
             with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
                 try:
@@ -75,3 +112,13 @@ class EmailNotifier:
         except Exception as e:
             print(f"Error sending email: {e}")
             return False
+
+    def _parse_date_from_path(self, receipt_path: str) -> str:
+        # Extract date from receipt path (assuming format like 01-03-2024.pdf)
+            receipt_date = os.path.basename(receipt_path).split('.')[0]
+            try:
+                return datetime.strptime(receipt_date, '%m-%d-%Y').strftime('%Y-%m-%d')
+                
+            except ValueError:
+                # Fallback to current date if parsing fails
+                return "Unknown"
