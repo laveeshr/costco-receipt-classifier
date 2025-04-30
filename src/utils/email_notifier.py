@@ -34,7 +34,7 @@ class EmailNotifier:
     def send_receipt_summary(self, receipt_details: ReceiptDetails, is_verified: bool) -> bool:
         """Send receipt summary via email"""
         try:
-            parsed_date = self._parse_date_from_path(receipt_details.receipt_path)
+            parsed_date = self._parse_date_from_path(receipt_details)
             msg = MIMEMultipart()
             msg['From'] = self.sender_email
             msg['To'] = self.recipient_email
@@ -44,16 +44,16 @@ class EmailNotifier:
             <html>
             <head>
                 <style>
-                    details {
+                    details {{
                         margin: 10px 0;
                         padding: 10px;
                         background-color: #f9f9f9;
                         border-radius: 4px;
-                    }
-                    summary {
+                    }}
+                    summary {{
                         cursor: pointer;
                         padding: 5px;
-                    }
+                    }}
                 </style>
             </head>
             <body>
@@ -76,7 +76,7 @@ class EmailNotifier:
                 """
                 for item in receipt_details.items:
                     if item.category == category:
-                        body += f"<li>{item.description} - ${item.price:.2f}</li>"
+                        body += f"<li>{item.name} - ${item.price:.2f}</li>"
                 body += """
                         </ul>
                     </div>
@@ -85,6 +85,16 @@ class EmailNotifier:
 
             body += f"""
             <h2>Receipt Summary:</h2>
+            """
+
+            if hasattr(receipt_details, 'warehouse_number') and receipt_details.warehouse_number:
+                body += f"""
+                <h3>Warehouse Information:</h3>
+                <p>Warehouse #: {receipt_details.warehouse_number}</p>
+                <p>Location: {getattr(receipt_details, 'warehouse_location', 'N/A')}</p>
+                """
+
+            body += f"""
             <p>Subtotal: ${receipt_details.subtotal:.2f}</p>
             <p>Tax: ${receipt_details.tax:.2f}</p>
             <p>Total: ${receipt_details.total:.2f}</p>
@@ -113,12 +123,15 @@ class EmailNotifier:
             print(f"Error sending email: {e}")
             return False
 
-    def _parse_date_from_path(self, receipt_path: str) -> str:
-        # Extract date from receipt path (assuming format like 01-03-2024.pdf)
-            receipt_date = os.path.basename(receipt_path).split('.')[0]
-            try:
-                return datetime.strptime(receipt_date, '%m-%d-%Y').strftime('%Y-%m-%d')
-                
-            except ValueError:
-                # Fallback to current date if parsing fails
-                return "Unknown"
+    def _parse_date_from_path(self, receipt_details: ReceiptDetails) -> str:
+        # First try to use transaction_datetime if available
+        if receipt_details.transaction_datetime:
+            return receipt_details.transaction_datetime.strftime('%Y-%m-%d')
+
+        # Fall back to parsing from filename
+        receipt_date = os.path.basename(receipt_details.receipt_path).split('.')[0]
+        try:
+            return datetime.strptime(receipt_date, '%m-%d-%Y').strftime('%Y-%m-%d')
+        except ValueError:
+            # Fallback to current date if parsing fails
+            return receipt_date

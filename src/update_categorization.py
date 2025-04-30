@@ -24,8 +24,6 @@ def update_item_categories(file_path: str, updates: List[Dict[str, str]]) -> Non
 # Example usage
 file_path: str = "/home/laveeeshr/Projects/costco-receipt-classifier/receipt_data/training_data.csv"
 updates: List[Dict[str, str]] = [
-    {"item_code": 970125, "new_category": "Household"},
-    {"item_code": 1796136, "new_category": "Household"},
-    {"item_code": 1701671, "new_category": "Household"}
+    {"item_code": 1881581, "new_category": "Homedecor"}
 ]
 update_item_categories(file_path, updates)

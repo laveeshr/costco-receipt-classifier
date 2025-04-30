@@ -5,11 +5,13 @@ import cv2
 import numpy as np
 from src.models.receipt_details import ReceiptDetails
 from src.costco_pdf_receipt_parser import CostcoPdfReceiptParser
+from src.costco_json_receipt_parser import CostcoJsonReceiptParser
 import shutil
 
 class CostcoReceiptParser:
     def __init__(self):
         self.pdf_parser = CostcoPdfReceiptParser()
+        self.json_parser = CostcoJsonReceiptParser()
 
     def _resize_image(self, image, target_width=1500):
         """
@@ -111,23 +113,32 @@ class CostcoReceiptParser:
             print(f"Error reading image {image_path} with OCR: {e}")
             return ReceiptDetails(items=[], receipt_path=image_path, subtotal=None, tax=None)
 
+    def parse_json_receipt(self, json_path: str) -> list[ReceiptDetails]:
+        """Parse a JSON receipt file."""
+        return self.json_parser.parse_json_receipt(json_path)
+
     def parse_receipts_from_directory(self, directory_path, use_ocr=False) -> list[ReceiptDetails]:
         """Parse all receipts in the directory."""
         receipt_details_list = []
         for file_name in os.listdir(directory_path):
             file_path = os.path.join(directory_path, file_name)
-            if file_name.lower().endswith('.pdf'):
+            if file_name.lower().endswith('.json'):
+                receipts = self.parse_json_receipt(file_path)
+                receipt_details_list.extend(receipts)
+            elif file_name.lower().endswith('.pdf'):
                 if use_ocr:
                     receipt_details = self.parse_receipt_pdf_with_ocr(file_path)
                 else:
                     receipt_details = self.parse_receipt_pdf(file_path)
+                receipt_details_list.append(receipt_details)
             elif file_name.lower().endswith(('.png', '.jpg', '.jpeg')):
                 receipt_details = self.parse_receipt_image(file_path)
+                receipt_details_list.append(receipt_details)
             else:
                 continue
-            
+
             trained_dir = os.path.join('training_data', 'trained')
             os.makedirs(trained_dir, exist_ok=True)
             shutil.move(file_path, os.path.join(trained_dir, os.path.basename(file_path)))
-            receipt_details_list.append(receipt_details)
+
         return receipt_details_list
