@@ -10,3 +10,7 @@ src/models/__pycache__/receipt_details.cpython-312.pyc
 src/utils/__pycache__/
 src/utils/__pycache__/*
 src/utils/__pycache__/whatsapp_notifier.cpython-312.pyc
+src/__pycache__/costco_receipt_parser.cpython-312.pyc
+src/__pycache__/receipt_agent.cpython-312.pyc
+src/models/__pycache__/item.cpython-312.pyc
+src/models/__pycache__/receipt_details.cpython-312.pyc
