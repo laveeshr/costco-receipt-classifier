@@ -155,6 +155,12 @@ class ReceiptAgent:
 
         return True
     
+    def _get_cleaned_code(self, code: str) -> str:
+        """
+        PD stringifies the float value of the code, so we do the same when checking for equality.
+        """
+        return str(float(code))
+    
     def predict(self, item: Item) -> Tuple[Optional[str], float]:
         """
         Predict category for an Item object using item.code or item.name.
@@ -171,7 +177,8 @@ class ReceiptAgent:
 
         # Check if item.code exists in training data
         if item.code:
-            exact_match = self.training_data[self.training_data['item_code'] == item.code]
+            cleaned_code = self._get_cleaned_code(item.code)
+            exact_match = self.training_data[self.training_data['item_code'] == cleaned_code]
             if not exact_match.empty and any(exact_match['verified']):
                 # If we have a verified match, use that category
                 category = exact_match[exact_match['verified']].iloc[0]['category']
@@ -209,7 +216,7 @@ class ReceiptAgent:
         for item in items:
             # Check if we've seen this exact item code or name before
             exact_match = self.training_data[
-                (self.training_data['item_code'] == item.code) |
+                (self.training_data['item_code'] == self._get_cleaned_code(item.code)) |
                 (self.training_data['item_text'] == item.name)
             ]
             
@@ -233,7 +240,11 @@ class ReceiptAgent:
                 print(f"\nItem: {item.name} (Code: {item.code})")
                 print(f"Predicted category: {category} (confidence: {confidence:.2f})")
                 # Dynamic category suggestions
-                suggested_categories = self.training_data['category'].value_counts().head(5).index.tolist()
+                # Get existing categories sorted by confidence
+                suggested_categories = self.training_data[self.training_data['verified']].groupby('category')['confidence'].mean().sort_values(ascending=False).index.tolist()
+                # If no categories exist yet, use a default list
+                if not suggested_categories:
+                    suggested_categories = ["Uncategorized"]
                 print(f"Suggested categories: {', '.join(suggested_categories)}")
                 user_category = input("Enter correct category (or press Enter to accept prediction): ")
                 
@@ -270,13 +281,7 @@ class ReceiptAgent:
             self.train_model(results)
         
         # Recalculate category-wide totals and tax percentages
-        category_totals, category_tax_percents = self._summarize_cost_by_category_and_tax(results)
-
-        # Calculate tax amounts per category
-        category_tax_amounts = {}
-        if receipt_details.tax > 0:
-            for category, tax_percent in category_tax_percents.items():
-                category_tax_amounts[category] = (tax_percent / 100.0) * receipt_details.tax
+        category_totals, category_tax_percents, category_tax_amounts = self._summarize_cost_by_category_and_tax(results, receipt_details.tax)
 
         # Update the ReceiptDetails object
         receipt_details.items = results
@@ -370,7 +375,7 @@ class ReceiptAgent:
             
         return tax_amounts
 
-    def _summarize_cost_by_category_and_tax(self, items: List[Item]) -> Tuple[Dict[str, float], Dict[str, float]]:
+    def _summarize_cost_by_category_and_tax(self, items: List[Item], receipt_tax: float) -> Tuple[Dict[str, float], Dict[str, float], Dict[str, float]]:
         """
         Summarize the total cost and tax by categories.
 
@@ -381,6 +386,7 @@ class ReceiptAgent:
             A tuple containing:
             - A dictionary with categories as keys and total costs as values.
             - A dictionary with categories as keys and tax percentages as values.
+            - A dictionary with categories as keys and tax amounts as values.
         """
         category_summary = {}
         category_taxable_amounts = {}
@@ -396,15 +402,17 @@ class ReceiptAgent:
 
         # Calculate tax percentages based on taxable amounts
         total_taxable = sum(category_taxable_amounts.values())
+
+        # Calculate tax amounts per category
+        category_tax_amounts = {}
         category_tax_percentages = {}
         
-        for category in category_summary.keys():
-            if total_taxable > 0:
-                category_tax_percentages[category] = (category_taxable_amounts.get(category, 0) / total_taxable) * 100
-            else:
-                category_tax_percentages[category] = 0
-        
-        return category_summary, category_tax_percentages
+        if total_taxable != 0:
+            for category in category_summary.keys():
+                category_tax_percentages[category] = abs((category_taxable_amounts.get(category, 0) / total_taxable) * 100)            
+                category_tax_amounts[category] = (category_tax_percentages[category] / 100.0) * receipt_tax
+
+        return category_summary, category_tax_percentages, category_tax_amounts
 
     def verify_receipt_total(self, receipt_details: ReceiptDetails) -> bool:
         """
@@ -418,7 +426,8 @@ class ReceiptAgent:
         """
         category_summary = receipt_details.category_totals
         total_from_categories = sum(category_summary.values())
-        return abs(total_from_categories - receipt_details.subtotal) < 0.01  # Allow small floating-point differences
+        total_tax = sum(receipt_details.category_tax_amounts.values())
+        return abs(total_from_categories - receipt_details.subtotal) < 0.01 and abs(total_tax - receipt_details.tax) < 0.01  # Allow small floating-point differences
 
 # Example usage
 if __name__ == "__main__":
