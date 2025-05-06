@@ -3,6 +3,7 @@ import json
 from datetime import datetime
 from src.models.item import Item
 from src.models.receipt_details import ReceiptDetails
+from src.costco_online_order_parser import CostcoOnlineOrderParser
 
 class CostcoJsonReceiptParser:
     def __init__(self):
@@ -81,6 +82,12 @@ class CostcoJsonReceiptParser:
         try:
             with open(json_file_path, 'r') as f:
                 receipts_data = json.load(f)
+
+            # Check if the JSON data matches the online order format
+            if isinstance(receipts_data, dict) and "data" in receipts_data and "getOnlineOrders" in receipts_data["data"]:
+                # Use the CostcoOnlineOrderParser for online orders
+                online_parser = CostcoOnlineOrderParser()
+                return online_parser.parse_online_order_json(receipts_data, json_file_path)
 
             receipt_details_list = []
             
